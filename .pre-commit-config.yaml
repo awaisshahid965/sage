@@ -1,0 +1,59 @@
+# Python's answer to husky + lint-staged.
+# Install the git hook once with:  uv run pre-commit install
+# Run against everything with:     uv run pre-commit run --all-files
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # --- hygiene -------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+      # No mixed-line-ending hook on purpose: `.gitattributes` (`* text=auto`)
+      # already normalises to LF in the repo while leaving CRLF in the Windows
+      # working copy. A hook that rewrites the working copy to LF would fight
+      # git for the same file, every commit.
+
+  # --- lint + format (ESLint + Prettier) -----------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # --- lockfile stays in sync with pyproject.toml --------------------------
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.11.29
+    hooks:
+      - id: uv-lock
+
+  # --- types (tsc --noEmit) ------------------------------------------------
+  # Run from the project venv rather than an isolated one, so mypy can see
+  # FastAPI's and pydantic's type stubs.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src tests
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
+
+  # --- tests, on push only -------------------------------------------------
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
