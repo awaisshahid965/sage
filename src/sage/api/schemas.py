@@ -1,13 +1,31 @@
-"""Request and response models.
+"""Request and response models: the wire contract.
 
-Pydantic models are the contract: they validate input, serialise output, and
-generate the OpenAPI schema. Keep them separate from any future persistence
-models so the wire format can evolve independently of storage.
+They validate untrusted input, serialise output, and generate the OpenAPI
+schema.
+
+On the overlap with `sage.domain.llm.Message` — the two look alike and stay
+separate on purpose:
+
+- This file is public. Changing it breaks clients and needs a version bump.
+  `Message` is internal and free to change any time.
+- This file distrusts its input, so it has length limits. `Message` is built
+  by our own code from values already checked, so it has none.
+- Merging them would turn every internal refactor into a breaking API change,
+  and would put pydantic in the domain layer.
+
+What they do share is vocabulary, not structure, and vocabulary has exactly
+one home: the domain. Hence the `Role` import below.
 """
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
+
+from sage.domain.llm import Role
+
+# Every field carrying user or model text uses this, so the limits are stated
+# once. Widen it here and both the question and the reply follow.
+MessageContent = Annotated[str, Field(min_length=1, max_length=32_000)]
 
 
 class HealthResponse(BaseModel):
@@ -19,19 +37,25 @@ class HealthResponse(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    """A single turn in a conversation."""
+    """A single turn in a conversation, as it appears on the wire."""
 
-    role: Literal["system", "user", "assistant"]
-    content: str = Field(min_length=1, max_length=32_000)
+    role: Role
+    content: MessageContent
 
 
 class ChatRequest(BaseModel):
-    """A conversation to continue."""
+    """A question for Sage."""
 
-    messages: list[ChatMessage] = Field(min_length=1)
+    question: MessageContent
 
 
 class ChatResponse(BaseModel):
     """The assistant's reply."""
 
     reply: ChatMessage
+
+
+class ErrorResponse(BaseModel):
+    """What the client gets when a request fails."""
+
+    detail: str

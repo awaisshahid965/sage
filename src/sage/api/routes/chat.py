@@ -1,21 +1,28 @@
 """Chat endpoint.
 
-A deliberately trivial echo for now — the point of the scaffold is the shape of
-the seam, not the model behind it. Swap the body of `chat` for a real assistant
-once there is one to call.
+Thin on purpose: parse, call the service, shape the response. The model call
+and the prompt live in `sage.application.chat`.
 """
 
 from fastapi import APIRouter
 
+from sage.api.deps import SageDep
 from sage.api.schemas import ChatMessage, ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-@router.post("", summary="Continue a conversation")
-async def chat(request: ChatRequest) -> ChatResponse:
-    """Return a reply to the most recent message."""
-    latest = request.messages[-1]
-    return ChatResponse(
-        reply=ChatMessage(role="assistant", content=f"You said: {latest.content}")
-    )
+@router.post(
+    "",
+    summary="Ask Sage a question",
+    responses={502: {"description": "The model call failed"}},
+)
+async def chat(body: ChatRequest, sage: SageDep) -> ChatResponse:
+    """Answer a single question.
+
+    An `LLMError` from any backend is turned into a 502 by the handler
+    registered in `sage.main`.
+    """
+    reply = await sage.ask(body.question)
+
+    return ChatResponse(reply=ChatMessage(role="assistant", content=reply))

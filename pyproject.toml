@@ -9,6 +9,10 @@ authors = [{ name = "Muhammad Awais", email = "awaisshahid965@gmail.com" }]
 
 dependencies = [
     "fastapi[standard]>=0.121.0",
+    "langchain>=1.0",
+    "langchain-core>=1.5.4",
+    "langchain-ollama>=1.1.0",
+    "langchain-openai>=1.5.0",
     "pydantic>=2.12.0",
     "pydantic-settings>=2.13.0",
     "structlog>=25.6.0",
