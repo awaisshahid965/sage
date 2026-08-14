@@ -7,7 +7,7 @@ Two jobs:
   `sage.domain.llm` knows which one is running.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 
 from sage.config import Settings
 from sage.domain.llm import ChatModel, Message
@@ -21,6 +21,13 @@ class EchoChatModel:
             if message.role == "user":
                 return f"You said: {message.content}"
         return "You said nothing."
+
+    async def stream(self, messages: Sequence[Message]) -> AsyncIterator[str]:
+        # A word at a time, so the streaming path has something to chew on
+        # without a network. Joining the pieces gives back exactly `complete`.
+        reply = await self.complete(messages)
+        for index, word in enumerate(reply.split(" ")):
+            yield word if index == 0 else f" {word}"
 
 
 def build(settings: Settings) -> ChatModel:

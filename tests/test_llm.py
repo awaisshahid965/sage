@@ -1,5 +1,7 @@
 """Tests for the seam itself: the factory and the LangChain adapter."""
 
+from collections.abc import AsyncIterator
+
 import pytest
 
 from sage.config import Settings
@@ -38,6 +40,15 @@ class _FakeLangChainModel:
             raise self._error
         return type("Reply", (), {"text": self._text})()
 
+    async def astream(self, payload: object) -> AsyncIterator[object]:
+        self.payload = payload
+        if self._error is not None:
+            raise self._error
+        chunk = type("Chunk", (), {"text": ""})
+        yield chunk()  # empty chunk, must be skipped
+        for word in self._text.split(" "):
+            yield type("Chunk", (), {"text": word})()
+
 
 async def test_adapter_converts_messages_to_role_content_tuples() -> None:
     fake = _FakeLangChainModel(text="hi there")
@@ -57,3 +68,29 @@ async def test_adapter_wraps_provider_errors_in_llm_error() -> None:
 
     with pytest.raises(LLMError, match="429 rate limited"):
         await adapter.complete([Message(role="user", content="yo")])
+
+
+async def test_adapter_streams_chunks_and_skips_empty_ones() -> None:
+    fake = _FakeLangChainModel(text="hi there you")
+    adapter = LangChainChatModel(fake)  # type: ignore[arg-type]
+
+    pieces = [p async for p in adapter.stream([Message(role="user", content="yo")])]
+
+    assert pieces == ["hi", "there", "you"]
+
+
+async def test_adapter_wraps_stream_errors_in_llm_error() -> None:
+    fake = _FakeLangChainModel(error=RuntimeError("connection reset"))
+    adapter = LangChainChatModel(fake)  # type: ignore[arg-type]
+
+    with pytest.raises(LLMError, match="connection reset"):
+        [p async for p in adapter.stream([Message(role="user", content="yo")])]
+
+
+async def test_echo_stream_reassembles_into_complete() -> None:
+    model = EchoChatModel()
+    messages = [Message(role="user", content="hello there")]
+
+    pieces = [p async for p in model.stream(messages)]
+
+    assert "".join(pieces) == await model.complete(messages)

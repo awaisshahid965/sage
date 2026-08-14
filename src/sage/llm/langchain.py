@@ -11,7 +11,7 @@ Each provider lives in its own package, so install the one you want
 (`uv add langchain-anthropic`) before pointing the setting at it.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 
 from langchain.chat_models import init_chat_model
@@ -46,6 +46,18 @@ class LangChainChatModel:
         # `.text` flattens the reply, which may be plain text or a list of
         # content blocks depending on the provider.
         return response.text
+
+    async def stream(self, messages: Sequence[Message]) -> AsyncIterator[str]:
+        payload = [(message.role, message.content) for message in messages]
+
+        try:
+            async for chunk in self._model.astream(payload):
+                # Providers send empty chunks (usage stats, role markers).
+                # Only pass on pieces that carry text.
+                if chunk.text:
+                    yield chunk.text
+        except Exception as exc:
+            raise LLMError(f"{type(exc).__name__}: {exc}") from exc
 
 
 def build(settings: Settings) -> ChatModel:

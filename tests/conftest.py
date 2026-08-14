@@ -44,9 +44,31 @@ class RecordingChatModel:
         self.seen = list(messages)
         return self.reply
 
+    async def stream(self, messages: Sequence[Message]) -> AsyncIterator[str]:
+        self.seen = list(messages)
+        for char in self.reply:
+            yield char
+
 
 class FailingChatModel:
     """A `ChatModel` that always fails, the way a real backend would."""
 
     async def complete(self, messages: Sequence[Message]) -> str:
         raise LLMError("provider is down")
+
+    def stream(self, messages: Sequence[Message]) -> AsyncIterator[str]:
+        # A plain `def` that raises satisfies the protocol too. This one fails
+        # on the call; `FailsMidStreamChatModel` fails during iteration.
+        raise LLMError("provider is down")
+
+
+class FailsMidStreamChatModel:
+    """Sends a few pieces, then dies. The case a 502 cannot express."""
+
+    async def complete(self, messages: Sequence[Message]) -> str:
+        raise LLMError("provider is down")
+
+    async def stream(self, messages: Sequence[Message]) -> AsyncIterator[str]:
+        yield "partial "
+        yield "answer "
+        raise LLMError("provider died halfway")

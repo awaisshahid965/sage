@@ -10,7 +10,7 @@ So there are two kinds of switch, and both are cheap:
   method, registered in `sage.llm.factory`. Nothing above this file moves.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -50,9 +50,18 @@ class LLMError(RuntimeError):
 class ChatModel(Protocol):
     """All Sage needs from a language model.
 
-    Any class with this method works, so adapters do not subclass anything.
+    Any class with these methods works, so adapters do not subclass anything.
     """
 
     async def complete(self, messages: Sequence[Message]) -> str:
         """Send `messages` and return the assistant's reply as text."""
+        ...
+
+    def stream(self, messages: Sequence[Message]) -> AsyncIterator[str]:
+        """Send `messages` and yield the reply in pieces as it arrives.
+
+        Joining every piece gives the same text `complete` would return.
+        Note this is a plain `def` returning an iterator, not an `async def`.
+        An `async def` with `yield` in it already satisfies this.
+        """
         ...
