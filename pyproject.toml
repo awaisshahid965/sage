@@ -55,6 +55,7 @@ format-check = "ruff format --check src tests"
 typecheck = "mypy src tests"
 test = "pytest"
 test-cov = "pytest --cov=sage --cov-report=term-missing --cov-report=html"
+logprobs = "python -m sage.logprobs"
 
 [tool.poe.tasks.check]
 help = "Run every gate CI runs, in the same order"
@@ -97,6 +98,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # asserts are the whole point of a test
+"src/sage/logprobs.py" = ["T20"]  # a CLI, so printing is the job
 
 [tool.ruff.lint.isort]
 known-first-party = ["sage"]
