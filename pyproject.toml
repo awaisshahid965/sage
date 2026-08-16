@@ -99,6 +99,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # asserts are the whole point of a test
 "src/sage/logprobs.py" = ["T20"]  # a CLI, so printing is the job
+# Standalone scripts, run by hand. Printing is their whole output. Every other
+# rule still applies, so unused imports and real bugs are still caught.
+"scripts/**/*.py" = ["T20"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["sage"]
