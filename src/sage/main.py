@@ -19,6 +19,7 @@ from sage.api.router import api_router
 from sage.api.schemas import ErrorResponse
 from sage.application.chat import SageService
 from sage.config import Settings, get_settings
+from sage.context.history import FullHistory
 from sage.domain.llm import LLMError
 from sage.llm.factory import create_chat_model
 from sage.logging import configure_logging, get_logger
@@ -58,7 +59,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Built once, at startup, so a bad model name or a missing key fails here
     # rather than on the first request.
-    sage = SageService(create_chat_model(settings))
+    #
+    # Both arguments are the app's two swappable halves. The second one is
+    # where a sliding window, a summariser, or retrieval goes -- on its own or
+    # inside a `Combined(...)` -- and it is the only line that has to change
+    # for any of them.
+    sage = SageService(create_chat_model(settings), FullHistory())
 
     app = FastAPI(
         title=settings.app_name,
