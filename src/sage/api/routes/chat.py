@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from sage.api.deps import SageDep
 from sage.api.schemas import ChatMessage, ChatRequest, ChatResponse
-from sage.domain.llm import LLMError
+from sage.domain.llm import LLMError, Message
 from sage.logging import get_logger
 
 log = get_logger(__name__)
@@ -20,6 +20,16 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 MODEL_UNREACHABLE = "The language model could not be reached."
+
+
+def _history(body: ChatRequest) -> list[Message]:
+    """Convert replayed wire turns into domain messages.
+
+    Crossing that boundary is the route's job, and it is the whole reason the
+    two types are separate. Nothing is re-validated here: pydantic already
+    checked this input, and past that point the app trusts its own values.
+    """
+    return [Message(role=turn.role, content=turn.content) for turn in body.history]
 
 
 @router.post(
@@ -33,7 +43,7 @@ async def chat(body: ChatRequest, sage: SageDep) -> ChatResponse:
     An `LLMError` from any backend is turned into a 502 by the handler
     registered in `sage.main`.
     """
-    reply = await sage.ask(body.question)
+    reply = await sage.ask(body.question, _history(body))
 
     return ChatResponse(reply=ChatMessage(role="assistant", content=reply))
 
@@ -68,7 +78,12 @@ async def chat_stream(body: ChatRequest, sage: SageDep) -> StreamingResponse:
 
     async def events() -> AsyncIterator[str]:
         try:
-            async for delta in sage.ask_stream(body.question):
+            # Awaited inside the generator, so a strategy that fails while
+            # assembling context is reported the same way a failing model is.
+            # By the time this body runs the 200 is already committed either
+            # way, so there is no branch here that could still be a 502.
+            deltas = await sage.ask_stream(body.question, _history(body))
+            async for delta in deltas:
                 yield _event("delta", {"text": delta})
         except LLMError as exc:
             log.error("stream_failed", error=str(exc))

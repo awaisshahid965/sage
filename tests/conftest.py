@@ -9,6 +9,8 @@ from collections.abc import AsyncIterator, Sequence
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from sage.api.deps import get_sage
+from sage.application.chat import SageService
 from sage.config import Settings
 from sage.domain.llm import LLMError, Message
 from sage.main import create_app
@@ -31,6 +33,17 @@ async def client(settings: Settings) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+def client_for(settings: Settings, service: SageService) -> AsyncClient:
+    """The same client, but with the routes pointed at `service`.
+
+    A function rather than a fixture because the service is what the test is
+    varying. Use it with `async with`.
+    """
+    app = create_app(settings)
+    app.dependency_overrides[get_sage] = lambda: service
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 class RecordingChatModel:

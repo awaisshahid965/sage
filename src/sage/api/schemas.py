@@ -43,10 +43,36 @@ class ChatMessage(BaseModel):
     content: MessageContent
 
 
+# A narrowing of the domain's `Role`, not a second vocabulary. The client
+# replays what was *said*; it does not get to say who Sage is. The system
+# prompt is the service's (see `sage.application.chat`), and leaving it out of
+# the wire type keeps that ownership a fact of the schema rather than a rule
+# someone has to remember.
+HistoryRole = Literal["user", "assistant"]
+
+# Sage holds no conversation state, so the client replays the history on every
+# request. That cap is the only thing standing between a request and a prompt
+# the size of the machine; the real limit is a token budget, which arrives with
+# the strategy that needs one.
+MAX_HISTORY_TURNS = 100
+
+
+class ChatTurn(BaseModel):
+    """One earlier turn, replayed by the client."""
+
+    role: HistoryRole
+    content: MessageContent
+
+
 class ChatRequest(BaseModel):
-    """A question for Sage."""
+    """A question for Sage, and the conversation it belongs to.
+
+    `history` is optional and defaults to empty, so a client that only ever
+    asks one-off questions sends exactly what it sent before.
+    """
 
     question: MessageContent
+    history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
 
 
 class ChatResponse(BaseModel):
