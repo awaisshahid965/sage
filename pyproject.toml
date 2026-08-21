@@ -48,6 +48,7 @@ module-root = "src"
 [tool.poe.tasks]
 dev = "fastapi dev src/sage/main.py"
 start = "fastapi run src/sage/main.py"
+down = "docker compose down"
 lint = "ruff check src tests"
 lint-fix = "ruff check --fix src tests"
 format = "ruff format src tests"
@@ -56,6 +57,30 @@ typecheck = "mypy src tests"
 test = "pytest"
 test-cov = "pytest --cov=sage --cov-report=term-missing --cov-report=html"
 logprobs = "python -m sage.logprobs"
+
+[tool.poe.tasks.frontend]
+help = "Frontend dev server alone, on http://localhost:5173"
+# `shell`, not `cmd`. A cmd task execs the program directly, and on Windows npm
+# is `npm.cmd` — a shim the exec cannot see, so it fails with "program not
+# found". Going through a shell gets PATHEXT resolution and works everywhere.
+shell = "npm --prefix frontend run dev"
+interpreter = ["pwsh", "powershell", "bash", "sh"]
+
+[tool.poe.tasks.up]
+help = "API + Redis in Docker, then the frontend dev server (ctrl-c stops the frontend; `poe down` stops the rest)"
+sequence = [
+    # Detached, so the sequence can carry on to the frontend. --build is a
+    # cached no-op unless the Dockerfile or the lockfile moved, and it means a
+    # dependency change cannot leave a stale image behind.
+    { cmd = "docker compose up -d --build" },
+    # Foreground, holding the terminal — the frontend is the half you are
+    # usually watching.
+    { ref = "frontend" },
+]
+
+[tool.poe.tasks.up-api]
+help = "API + Redis in Docker only, logs in the foreground"
+cmd = "docker compose up --build"
 
 [tool.poe.tasks.check]
 help = "Run every gate CI runs, in the same order"

@@ -142,8 +142,35 @@ cp .env.example .env       # optional — every setting has a default
 uv run poe dev             # http://127.0.0.1:8000  (interactive docs at /docs)
 ```
 
+### The whole thing
+
+`poe dev` runs the API alone. To bring up everything — API and Redis in Docker, chat UI on the host
+— you need Docker Desktop running and the frontend's dependencies installed once:
+
+```bash
+npm --prefix frontend install
+uv run poe up              # UI on :5173, API on :8000, Redis on :6379
+```
+
+Ctrl-C stops the frontend; the containers keep running until `uv run poe down`.
+
+The frontend deliberately isn't a compose service. It runs on the host under Vite so hot reload and
+the `/chat` proxy behave normally, and so the containers hold only the things that will one day be
+deployed.
+
+Redis is up but unused: nothing reads it until conversations move server-side. It's here so that
+step is a config field rather than an infrastructure change.
+
+It keeps its append-only log in a named volume, so `poe down` and a rebuild both leave the data
+alone — expiring and surviving are different things, and conversations want both: gone after their
+TTL, still there after a restart. `docker compose down -v` is the deliberate way to wipe it.
+
 | Command | Does |
 |---|---|
+| `uv run poe up` | Docker (API + Redis), then the frontend dev server |
+| `uv run poe up-api` | Docker only, logs in the foreground |
+| `uv run poe frontend` | Frontend dev server alone |
+| `uv run poe down` | Stop the containers |
 | `uv run poe dev` / `start` | Dev server with reload / production server |
 | `uv run poe test` / `test-cov` | 35 tests / with coverage |
 | `uv run poe typecheck` | mypy, strict |
@@ -201,6 +228,8 @@ it — what's here, and what isn't yet.
 - Answers streamed over Server-Sent Events
 - First-token probability distribution exposed as a CLI
 - Multi-turn conversations, with what enters the prompt chosen behind a second port
+- A chat UI on [assistant-ui](frontend/), talking to the streaming endpoint
+- Docker Compose for the API and a Redis that conversations will move into
 
 **Next, roughly in order**
 

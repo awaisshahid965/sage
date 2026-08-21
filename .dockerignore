@@ -1,0 +1,25 @@
+# Keep the build context small and secret-free. Everything the image needs is
+# named explicitly in the Dockerfile; this is what must never travel.
+
+# The host's virtualenv is built for the host's platform. The image builds its
+# own, and copying this one in would shadow it with the wrong binaries.
+.venv/
+
+# The frontend is not part of the API image, and node_modules is the single
+# largest thing in the repo.
+frontend/
+
+.git/
+.github/
+
+# Secrets. Compose injects these at runtime instead, so they never end up in a
+# layer where `docker history` can read them back out.
+.env
+
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

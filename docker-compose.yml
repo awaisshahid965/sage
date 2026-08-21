@@ -1,0 +1,98 @@
+# Development compose: the API, and the Redis that conversations will move into.
+#
+# The frontend is deliberately not a service here. It runs on the host under
+# Vite so hot reload and the /chat proxy behave normally; `uv run poe up`
+# starts both halves.
+
+services:
+  api:
+    build: .
+    ports:
+      - '8000:8000'
+
+    # The developer's own settings. Marked optional so a fresh clone with no
+    # .env still comes up — every setting in sage.config has a default.
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      # Inside a container "localhost" is the container. Services reach each
+      # other by service name on the compose network.
+      #
+      # Nothing reads this yet: sage.config has no redis field until the
+      # conversation-id work lands. It is here so that step is a config field
+      # and not a compose change too.
+      SAGE_REDIS_URL: redis://redis:6379/0
+
+      # Read by the ollama client directly, not by Settings — so it is inert
+      # unless SAGE_LLM_MODEL names the ollama provider, and switching to
+      # OpenAI or Anthropic ignores it entirely. Without it, a container
+      # pointed at a host Ollama tries to reach itself and fails.
+      OLLAMA_HOST: http://host.docker.internal:11434
+
+    volumes:
+      # Read-only, so --reload picks up edits without a rebuild. The venv lives
+      # at /app/.venv and is not shadowed by this.
+      - ./src:/app/src:ro
+
+    # Overrides the image's CMD to add --reload. The image itself stays
+    # production-shaped.
+    command: uvicorn sage.main:app --host 0.0.0.0 --port 8000 --reload
+
+    extra_hosts:
+      # Lets the container reach services on the host — Ollama, above. Docker
+      # Desktop provides this name already; the line is what makes it work on
+      # Linux too.
+      - 'host.docker.internal:host-gateway'
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  redis:
+    image: redis:8-alpine
+
+    # Published so redis-cli and the tests can reach it from the host while the
+    # storage layer is being written.
+    ports:
+      - '6379:6379'
+
+    # Expiring and surviving are different things, and conversations want both:
+    # gone after a day, but still there after a restart.
+    #
+    # appendonly yes writes every change to an append-only log and replays it
+    #   on boot. Without it Redis holds everything in memory only, and the
+    #   volume below would sit empty however long it lived.
+    # volatile-lru evicts least-recently-used keys *that carry a TTL* once the
+    #   cap is hit. It pairs with the per-key expiry the app will set;
+    #   allkeys-lru would happily evict keys that were never meant to expire.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru
+
+    volumes:
+      # Where the append-only log lives. A named volume rather than a bind
+      # mount: it is Docker's to manage, it does not depend on host paths, and
+      # `docker compose down -v` is the deliberate way to wipe it.
+      - redis-data:/data
+
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
