@@ -17,11 +17,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Covers /chat and /chat/stream.
-      '/chat': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-      },
+      // Every API prefix has to be listed. An unlisted one is not an error —
+      // Vite serves index.html for it, so the fetch gets a 200 full of HTML
+      // and fails somewhere far away from the cause.
+      '/chat': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/conversations': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/health': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },
   },
 })
