@@ -44,21 +44,20 @@ class ChatMessage(BaseModel):
 
 
 # A narrowing of the domain's `Role`, not a second vocabulary. The client
-# replays what was *said*; it does not get to say who Sage is. The system
-# prompt is the service's (see `sage.application.chat`), and leaving it out of
-# the wire type keeps that ownership a fact of the schema rather than a rule
+# reads what was *said*; it does not get to say who Sage is. The system prompt
+# is the service's (see `sage.application.chat`), and leaving it out of the
+# wire type keeps that ownership a fact of the schema rather than a rule
 # someone has to remember.
 HistoryRole = Literal["user", "assistant"]
 
-# Sage holds no conversation state, so the client replays the history on every
-# request. That cap is the only thing standing between a request and a prompt
-# the size of the machine; the real limit is a token budget, which arrives with
-# the strategy that needs one.
-MAX_HISTORY_TURNS = 100
+# Long enough for any id Sage mints, short enough that a client cannot use the
+# field as a place to put a payload. Unknown ids are rejected by being unknown,
+# not by their shape, so this is a size limit and nothing more.
+ConversationId = Annotated[str, Field(min_length=1, max_length=64)]
 
 
 class ChatTurn(BaseModel):
-    """One earlier turn, replayed by the client."""
+    """One turn of a stored conversation."""
 
     role: HistoryRole
     content: MessageContent
@@ -67,18 +66,41 @@ class ChatTurn(BaseModel):
 class ChatRequest(BaseModel):
     """A question for Sage, and the conversation it belongs to.
 
-    `history` is optional and defaults to empty, so a client that only ever
-    asks one-off questions sends exactly what it sent before.
+    The client sends an id, not a history. Sage holds the turns, so a client
+    cannot claim the assistant said something it did not — which is the whole
+    reason conversations moved server-side.
+
+    Omit `conversation_id` to start a new conversation. Send one Sage does not
+    recognise and it starts a new one anyway, returning the new id: an id is a
+    key that may or may not open something, never a claim that it should.
     """
 
     question: MessageContent
-    history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
+    conversation_id: ConversationId | None = None
 
 
 class ChatResponse(BaseModel):
-    """The assistant's reply."""
+    """The assistant's reply, and the conversation it belongs to.
+
+    `conversation_id` comes back on every response, not only the first. The
+    client stores whatever it is told and sends it next time, which means the
+    "your conversation expired, here is a new one" case needs no special
+    handling on the client beyond noticing `conversation_restarted`.
+    """
 
     reply: ChatMessage
+    conversation_id: str
+
+    # True when the id sent was not honoured — expired, evicted, or never
+    # existed — and this reply was produced with no history behind it.
+    conversation_restarted: bool = False
+
+
+class ConversationResponse(BaseModel):
+    """A stored conversation, as the client picks it up after a reload."""
+
+    conversation_id: str
+    messages: list[ChatTurn]
 
 
 class ErrorResponse(BaseModel):

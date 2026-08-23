@@ -12,8 +12,46 @@ from httpx import ASGITransport, AsyncClient
 from sage.api.deps import get_sage
 from sage.application.chat import SageService
 from sage.config import Settings
-from sage.domain.llm import LLMError, Message
+from sage.context.history import FullHistory
+from sage.conversations.memory import InMemoryConversationStore
+from sage.domain.context import ContextStrategy
+from sage.domain.conversation import ConversationStore
+from sage.domain.llm import ChatModel, LLMError, Message
 from sage.main import create_app
+
+# Long enough that nothing expires mid-test by accident. Tests about expiry
+# drive an injected clock instead of waiting.
+TEST_TTL = 3600
+
+
+async def seeded_store(
+    turns: list[Message], conversation_id: str = "abc"
+) -> InMemoryConversationStore:
+    """A store that already holds `turns` under `conversation_id`.
+
+    History reaches the service through the store now, so a test about context
+    has to put it there rather than pass it in.
+    """
+    store = InMemoryConversationStore(TEST_TTL)
+    await store.append(conversation_id, turns)
+    return store
+
+
+def make_service(
+    model: ChatModel,
+    context: ContextStrategy | None = None,
+    store: ConversationStore | None = None,
+) -> SageService:
+    """A `SageService` with the boring defaults filled in.
+
+    Three ports is a lot to restate in every test, and most tests care about
+    exactly one of them.
+    """
+    return SageService(
+        model,
+        context if context is not None else FullHistory(),
+        store if store is not None else InMemoryConversationStore(TEST_TTL),
+    )
 
 
 @pytest.fixture

@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     # Optional. Any OpenAI-compatible server: Ollama, vLLM, OpenRouter, a proxy.
     llm_base_url: str | None = None
 
+    # --- Conversations -----------------------------------------------------
+    # Where conversations live between requests. "memory" is the default for
+    # the same reason "echo" is: the app boots and the suite passes with no
+    # infrastructure at all. docker-compose sets this to "redis".
+    conversation_store: Literal["memory", "redis"] = "memory"
+
+    redis_url: str = "redis://localhost:6379/0"
+
+    # How long a conversation survives *silence*. The clock restarts on every
+    # exchange, so this is not a cap on how long a conversation may run — it is
+    # how long an abandoned one lingers. A day, matching the eviction policy
+    # the Redis service is configured with.
+    conversation_ttl_seconds: int = Field(default=86_400, gt=0)
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

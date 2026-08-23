@@ -8,8 +8,8 @@ a retriever that returns text nobody said. If either needed a change to
 
 from collections.abc import Sequence
 
-from conftest import RecordingChatModel
-from sage.application.chat import SYSTEM_PROMPT, SageService
+from conftest import RecordingChatModel, make_service, seeded_store
+from sage.application.chat import SYSTEM_PROMPT
 from sage.context.combined import Combined
 from sage.context.history import FullHistory
 from sage.domain.context import Conversation
@@ -81,8 +81,10 @@ async def test_combined_with_nothing_in_it_selects_nothing() -> None:
 async def test_a_strategy_is_given_the_question_and_the_history_separately() -> None:
     """A retriever searches with the question; a window must not count it."""
     strategy = RecordingStrategy()
+    store = await seeded_store(TURNS)
 
-    await SageService(RecordingChatModel(), strategy).ask("and to Berlin?", TURNS)
+    service = make_service(RecordingChatModel(), strategy, store)
+    await service.ask("and to Berlin?", "abc")
 
     assert strategy.seen is not None
     assert strategy.seen.question == "and to Berlin?"
@@ -97,9 +99,10 @@ async def test_a_new_strategy_needs_no_change_to_the_service() -> None:
     instructions first, live question last.
     """
     model = RecordingChatModel()
-    service = SageService(model, Combined(LastTurnOnly(), Passages("30 days.")))
+    store = await seeded_store(TURNS)
+    service = make_service(model, Combined(LastTurnOnly(), Passages("30 days.")), store)
 
-    await service.ask("and to Berlin?", TURNS)
+    await service.ask("and to Berlin?", "abc")
 
     assert [(m.role, m.content) for m in model.seen] == [
         ("system", SYSTEM_PROMPT),
@@ -112,9 +115,10 @@ async def test_a_new_strategy_needs_no_change_to_the_service() -> None:
 async def test_the_strategy_shapes_the_streamed_prompt_too() -> None:
     """Both entry points share `_prompt`, so neither can drift from the other."""
     model = RecordingChatModel(reply="ok")
-    service = SageService(model, LastTurnOnly())
+    store = await seeded_store(TURNS)
+    service = make_service(model, LastTurnOnly(), store)
 
-    deltas = await service.ask_stream("and to Berlin?", TURNS)
+    _, deltas = await service.ask_stream("and to Berlin?", "abc")
 
     assert "".join([delta async for delta in deltas]) == "ok"
     assert [(m.role, m.content) for m in model.seen] == [

@@ -1,8 +1,11 @@
-"""The chat use case: build the prompt, call the model, hand back the text."""
+"""The chat use case: resolve the conversation, build the prompt, answer, remember."""
 
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
+from uuid import uuid4
 
 from sage.domain.context import ContextStrategy, Conversation
+from sage.domain.conversation import ConversationStore
 from sage.domain.llm import ChatModel, Message
 
 SYSTEM_PROMPT = (
@@ -11,59 +14,143 @@ SYSTEM_PROMPT = (
 )
 
 
-class SageService:
-    """Answers questions.
+@dataclass(frozen=True, slots=True)
+class Resolved:
+    """Which conversation a request turned out to belong to.
 
-    It depends on two ports and no vendor: `ChatModel` decides who answers,
-    `ContextStrategy` decides what they are told. Neither is defaulted here --
-    `sage.main` is the one file that knows which implementations are running.
-    Tests pass fakes for both and never touch the network.
+    `is_new` is not decoration. A client that sent an id and gets a different
+    one back has had its conversation expire underneath it, and needs to know
+    that rather than infer it — the answer it is about to read was produced
+    without any of the history it can still see on screen.
+    """
+
+    conversation_id: str
+    history: list[Message]
+    is_new: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Answer:
+    """A reply, and the conversation it now belongs to."""
+
+    reply: str
+    conversation: Resolved
+
+
+class SageService:
+    """Answers questions, and remembers them.
+
+    Depends on three ports and no vendor: `ChatModel` decides who answers,
+    `ContextStrategy` decides what they are told, `ConversationStore` decides
+    what is remembered. `sage.main` is the one file that knows which
+    implementations are running.
     """
 
     def __init__(
         self,
         model: ChatModel,
         context: ContextStrategy,
+        store: ConversationStore,
         system_prompt: str = SYSTEM_PROMPT,
     ) -> None:
         self._model = model
         self._context = context
+        self._store = store
         self._system_prompt = system_prompt
 
-    async def _prompt(self, question: str, history: Sequence[Message]) -> list[Message]:
-        """Build the turns to send. Both ways of asking share this.
+    async def resolve(self, conversation_id: str | None) -> Resolved:
+        """Find the conversation a request belongs to, minting one if needed.
 
-        The frame is fixed and belongs to the service: instructions first, the
-        live question last, wherever it came from. Everything between the two
-        is the strategy's to decide, and this method does not know or care
-        whether it got replayed turns, a summary, or retrieved passages.
+        Three cases, and only one of them is interesting:
+
+        - No id: a first request. New id, no history.
+        - An id the store knows: carry on with what it has.
+        - An id the store does not know: expired, evicted, or invented. A new
+          id is minted and the old one is not honoured.
+
+        That last case is why the id cannot be trusted as a claim. Accepting
+        an unknown id and creating a conversation under it would let a client
+        choose its own ids, which is exactly the property server-generated ids
+        exist to remove.
         """
-        conversation = Conversation(question=question, history=history)
+        if conversation_id is not None:
+            history = await self._store.load(conversation_id)
+            if history is not None:
+                return Resolved(conversation_id, history, is_new=False)
 
+        return Resolved(str(uuid4()), [], is_new=True)
+
+    async def history(self, conversation_id: str) -> list[Message] | None:
+        """The turns stored for an id, or `None` if nothing is stored under it."""
+        return await self._store.load(conversation_id)
+
+    def _prompt(self, question: str, context: Sequence[Message]) -> list[Message]:
+        """The frame: instructions first, live question last."""
         return [
             Message(role="system", content=self._system_prompt),
-            *await self._context.select(conversation),
+            *context,
             Message(role="user", content=question),
         ]
 
-    async def ask(self, question: str, history: Sequence[Message] = ()) -> str:
+    async def _select(self, question: str, history: Sequence[Message]) -> list[Message]:
+        conversation = Conversation(question=question, history=history)
+        return list(await self._context.select(conversation))
+
+    async def _remember(self, conversation_id: str, question: str, reply: str) -> None:
+        """Store both halves of a completed exchange, together.
+
+        Both at once, and only once the reply exists. A question stored before
+        the answer would be replayed on the next turn as though it had been
+        answered, and a reply that never arrived would leave it there forever.
+        """
+        await self._store.append(
+            conversation_id,
+            [
+                Message(role="user", content=question),
+                Message(role="assistant", content=reply),
+            ],
+        )
+
+    async def ask(self, question: str, conversation_id: str | None = None) -> Answer:
         """Answer one question. Raises `LLMError` if the model call fails."""
-        return await self._model.complete(await self._prompt(question, history))
+        conversation = await self.resolve(conversation_id)
+        context = await self._select(question, conversation.history)
+
+        reply = await self._model.complete(self._prompt(question, context))
+
+        await self._remember(conversation.conversation_id, question, reply)
+
+        return Answer(reply=reply, conversation=conversation)
 
     async def ask_stream(
-        self, question: str, history: Sequence[Message] = ()
-    ) -> AsyncIterator[str]:
-        """Answer one question in pieces, as the model produces them.
+        self, question: str, conversation_id: str | None = None
+    ) -> tuple[Resolved, AsyncIterator[str]]:
+        """Answer one question in pieces, and remember it once it finishes.
 
-        An `async def` that *returns* the model's iterator rather than yielding
-        through one of its own. There is no `yield` in this body, so awaiting
-        it assembles the prompt and hands back the model's own stream -- the
-        `LLMError` from a failing model still surfaces while the caller
-        iterates, not here.
+        Returns the conversation before the stream, because the caller has to
+        tell the client which conversation this is *before* the answer starts
+        arriving — and if the id changed, the client needs that on screen at
+        the top of the reply rather than after it.
 
-        It has to be awaited now, because building the prompt can do I/O: a
-        summarising or retrieving strategy makes a call of its own. That work
-        genuinely happens before the model does, so a failure in it genuinely
-        belongs at call time rather than mid-stream.
+        This does wrap the model's iterator in one of its own, which the
+        non-streaming path still avoids. The reason is that an exchange is not
+        complete until the last chunk lands, and something has to be there to
+        notice and write it down. An `LLMError` still surfaces mid-iteration,
+        and a stream that dies part-way is never stored: a half-answer is not
+        something to replay into a later prompt as though it were said.
         """
-        return self._model.stream(await self._prompt(question, history))
+        conversation = await self.resolve(conversation_id)
+        context = await self._select(question, conversation.history)
+
+        async def stream() -> AsyncIterator[str]:
+            pieces: list[str] = []
+
+            async for piece in self._model.stream(self._prompt(question, context)):
+                pieces.append(piece)
+                yield piece
+
+            await self._remember(
+                conversation.conversation_id, question, "".join(pieces)
+            )
+
+        return conversation, stream()

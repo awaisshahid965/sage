@@ -17,12 +17,14 @@ services:
         required: false
 
     environment:
+      # The default is "memory" so the app and the test suite run with no
+      # infrastructure. Inside compose there *is* infrastructure, so use it —
+      # otherwise conversations would quietly live in the process and vanish on
+      # every reload.
+      SAGE_CONVERSATION_STORE: redis
+
       # Inside a container "localhost" is the container. Services reach each
       # other by service name on the compose network.
-      #
-      # Nothing reads this yet: sage.config has no redis field until the
-      # conversation-id work lands. It is here so that step is a config field
-      # and not a compose change too.
       SAGE_REDIS_URL: redis://redis:6379/0
 
       # Read by the ollama client directly, not by Settings — so it is inert

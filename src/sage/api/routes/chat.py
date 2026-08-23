@@ -1,7 +1,7 @@
 """Chat endpoints.
 
-Thin on purpose: parse, call the service, shape the response. The model call
-and the prompt live in `sage.application.chat`.
+Thin on purpose: parse, call the service, shape the response. The model call,
+the prompt and the conversation rules live in `sage.application.chat`.
 """
 
 import json
@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from sage.api.deps import SageDep
 from sage.api.schemas import ChatMessage, ChatRequest, ChatResponse
-from sage.domain.llm import LLMError, Message
+from sage.domain.llm import LLMError
 from sage.logging import get_logger
 
 log = get_logger(__name__)
@@ -20,16 +20,6 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 MODEL_UNREACHABLE = "The language model could not be reached."
-
-
-def _history(body: ChatRequest) -> list[Message]:
-    """Convert replayed wire turns into domain messages.
-
-    Crossing that boundary is the route's job, and it is the whole reason the
-    two types are separate. Nothing is re-validated here: pydantic already
-    checked this input, and past that point the app trusts its own values.
-    """
-    return [Message(role=turn.role, content=turn.content) for turn in body.history]
 
 
 @router.post(
@@ -43,12 +33,19 @@ async def chat(body: ChatRequest, sage: SageDep) -> ChatResponse:
     An `LLMError` from any backend is turned into a 502 by the handler
     registered in `sage.main`.
     """
-    reply = await sage.ask(body.question, _history(body))
+    answer = await sage.ask(body.question, body.conversation_id)
 
-    return ChatResponse(reply=ChatMessage(role="assistant", content=reply))
+    return ChatResponse(
+        reply=ChatMessage(role="assistant", content=answer.reply),
+        conversation_id=answer.conversation.conversation_id,
+        # Only a restart the client did not ask for is worth reporting. A
+        # request that sent no id was starting fresh on purpose.
+        conversation_restarted=answer.conversation.is_new
+        and body.conversation_id is not None,
+    )
 
 
-def _event(name: str, data: dict[str, str]) -> str:
+def _event(name: str, data: dict[str, object]) -> str:
     """Format one Server-Sent Event.
 
     The payload is JSON rather than raw text because SSE separates frames with
@@ -66,8 +63,12 @@ def _event(name: str, data: dict[str, str]) -> str:
 async def chat_stream(body: ChatRequest, sage: SageDep) -> StreamingResponse:
     """Answer a single question, sending each piece as the model produces it.
 
-    Emits three kinds of event: `delta` for each piece of the answer, then
-    either `done` or `error`.
+    Emits `conversation` first, then a `delta` per piece, then `done` or
+    `error`.
+
+    `conversation` leads deliberately. If the id sent had expired, the client
+    is about to receive an answer written with none of the history still on its
+    screen, and it needs to know that before the text arrives rather than after.
 
     Failures cannot use the 502 handler here. By the time the model fails, a
     200 and its headers are already on the wire, and a status code cannot be
@@ -78,11 +79,23 @@ async def chat_stream(body: ChatRequest, sage: SageDep) -> StreamingResponse:
 
     async def events() -> AsyncIterator[str]:
         try:
-            # Awaited inside the generator, so a strategy that fails while
-            # assembling context is reported the same way a failing model is.
-            # By the time this body runs the 200 is already committed either
-            # way, so there is no branch here that could still be a 502.
-            deltas = await sage.ask_stream(body.question, _history(body))
+            conversation, deltas = await sage.ask_stream(
+                body.question, body.conversation_id
+            )
+        except LLMError as exc:
+            log.error("stream_setup_failed", error=str(exc))
+            yield _event("error", {"detail": MODEL_UNREACHABLE})
+            return
+
+        yield _event(
+            "conversation",
+            {
+                "conversation_id": conversation.conversation_id,
+                "restarted": conversation.is_new and body.conversation_id is not None,
+            },
+        )
+
+        try:
             async for delta in deltas:
                 yield _event("delta", {"text": delta})
         except LLMError as exc:
