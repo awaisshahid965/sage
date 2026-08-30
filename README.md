@@ -310,7 +310,7 @@ deliberate way to wipe either.
 
 | Command | Does |
 |---|---|
-| `uv run poe up` | Docker (API + Redis + Qdrant), then the frontend dev server |
+| `uv run poe up` | Docker (Qdrant, index build, API + Redis), then the frontend dev server |
 | `uv run poe up-api` | Docker only, logs in the foreground |
 | `uv run poe frontend` | Frontend dev server alone |
 | `uv run poe down` | Stop the containers |
@@ -345,9 +345,17 @@ The index was built with 'hashing:v1:512' but the running embedder is
 Rebuild with `uv run poe index`.
 ```
 
-One wrinkle worth knowing if you index into the compose Qdrant: `poe index` runs on the host, where
-the service is `http://localhost:6333`, while the API inside compose reaches it as
-`http://qdrant:6333`. Compose sets the container's value; `.env` sets yours.
+Under Docker none of this is your problem: compose has an `indexer` service that runs to completion
+before the API starts, so `poe up` builds the index and then serves it. It is a service rather than
+a command you remember to run because the alternative asks two environments to agree about which
+store, which URL and which embedder — an agreement nothing enforces, and one the defaults do not
+make. Same image, same variables, same network: there is nothing left to keep in step.
+
+To rebuild the index without restarting the stack:
+
+```bash
+docker compose run --rm indexer
+```
 
 ### Endpoints
 

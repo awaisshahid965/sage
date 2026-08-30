@@ -47,6 +47,11 @@ services:
       # at /app/.venv and is not shadowed by this.
       - ./src:/app/src:ro
 
+      # The corpus and any file-backed index. Read-only: serving an index and
+      # building one are different jobs, and only the indexer below does the
+      # second.
+      - ./data:/app/data:ro
+
     # Overrides the image's CMD to add --reload. The image itself stays
     # production-shaped.
     command: uvicorn sage.main:app --host 0.0.0.0 --port 8000 --reload
@@ -60,8 +65,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+      # The index, not the database. Retrieval refuses to start without one, so
+      # the precondition worth waiting on is a finished build.
+      indexer:
+        condition: service_completed_successfully
 
     healthcheck:
       test:
@@ -75,6 +82,49 @@ services:
       timeout: 3s
       retries: 5
       start_period: 15s
+
+  # Builds the index, then exits.
+  #
+  # An index is a build artefact, so something has to build it, and the choice
+  # is between a command you remember to run on the host and a service that
+  # runs here. The host version needs two environments to agree about which
+  # store, which URL and which embedder — an agreement nothing enforces, and
+  # one the defaults do not make: on the host a file-backed index lands in
+  # ./data/index, while everything in this file reads Qdrant.
+  #
+  # Same image, same variables, same network. There is nothing left to keep in
+  # step. `poe index` on the host remains the right command for a host-side
+  # index; it is simply not what `poe up` depends on.
+  indexer:
+    build: .
+
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      SAGE_RETRIEVAL: 'true'
+      SAGE_VECTOR_STORE: qdrant
+      SAGE_QDRANT_URL: http://qdrant:6333
+      OLLAMA_HOST: http://host.docker.internal:11434
+
+    volumes:
+      - ./src:/app/src:ro
+      # Writable, unlike the API's mount: a file-backed store persists here.
+      - ./data:/app/data
+
+    command: python -m sage.indexing
+
+    # A failed build must stop the stack rather than be retried into a loop —
+    # a missing corpus or a rejected API key will fail identically every time.
+    restart: 'no'
+
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+    depends_on:
+      qdrant:
+        condition: service_healthy
 
   redis:
     image: redis:8-alpine
@@ -128,11 +178,23 @@ services:
       # replaces it, or until `docker compose down -v` wipes it deliberately.
       - qdrant-data:/qdrant/storage
 
-    # No healthcheck. The image carries no shell and no curl, so the usual
-    # `CMD curl` test fails on a container that is perfectly healthy — and a
-    # healthcheck that reports false is worse than none. The API waits on
-    # `service_started` and the staleness guard catches an empty index at
-    # startup with a message that says what to run.
+    # The indexer waits on this, so it has to be true rather than decorative.
+    #
+    # The image carries bash but no curl, wget or nc, which rules out the usual
+    # `CMD curl` probe. Bash opens a socket of its own through /dev/tcp, and one
+    # line of HTTP at Qdrant's readiness endpoint is the whole test.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bash',
+          '-c',
+          'exec 3<>/dev/tcp/127.0.0.1/6333 && printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q "200 OK" <&3',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
 volumes:
   redis-data:
