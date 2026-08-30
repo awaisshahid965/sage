@@ -27,6 +27,15 @@ services:
       # other by service name on the compose network.
       SAGE_REDIS_URL: redis://redis:6379/0
 
+      # Retrieval is off by default so a fresh clone boots with no index. It
+      # is on in compose because compose is where the infrastructure it needs
+      # actually exists — but the app will refuse to start until `poe index`
+      # has been run against the same settings, which is the staleness guard
+      # doing its job rather than a misconfiguration.
+      SAGE_RETRIEVAL: 'true'
+      SAGE_VECTOR_STORE: qdrant
+      SAGE_QDRANT_URL: http://qdrant:6333
+
       # Read by the ollama client directly, not by Settings — so it is inert
       # unless SAGE_LLM_MODEL names the ollama provider, and switching to
       # OpenAI or Anthropic ignores it entirely. Without it, a container
@@ -51,6 +60,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
     healthcheck:
       test:
@@ -96,5 +107,33 @@ services:
       timeout: 3s
       retries: 5
 
+  qdrant:
+    # Pinned to the same minor as the `qdrant-client` in the lockfile. The
+    # client checks the server's version on connect and warns when they drift,
+    # and keeping the two in step means `uv add qdrant-client` and this line
+    # are a single decision rather than two that silently diverge.
+    image: qdrant/qdrant:v1.19.0
+
+    ports:
+      # 6333 is the REST API and the dashboard at /dashboard; 6334 is gRPC.
+      # Published so `poe index` and `poe bench` can reach it from the host —
+      # both run outside compose, because an index is a build artefact rather
+      # than part of the running system.
+      - '6333:6333'
+      - '6334:6334'
+
+    volumes:
+      # Named volume, as for Redis. Unlike conversations, an index has no TTL
+      # and is not meant to expire — it survives until the next `poe index`
+      # replaces it, or until `docker compose down -v` wipes it deliberately.
+      - qdrant-data:/qdrant/storage
+
+    # No healthcheck. The image carries no shell and no curl, so the usual
+    # `CMD curl` test fails on a container that is perfectly healthy — and a
+    # healthcheck that reports false is worse than none. The API waits on
+    # `service_started` and the staleness guard catches an empty index at
+    # startup with a message that says what to run.
+
 volumes:
   redis-data:
+  qdrant-data:

@@ -181,3 +181,10 @@ cython_debug/
 .cursorindexingignore
 
 todo.md
+
+# Built indexes. An index is a build artefact — derived from data/pebble by
+# `uv run poe index`, rebuilt in seconds, and binary. Committing one means
+# reviewing a vectors.npy diff and, worse, means the repo can carry an index
+# built by an embedder nobody remembers choosing.
+data/index/
+data/qdrant-local/

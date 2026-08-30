@@ -10,7 +10,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from sage.api.deps import get_sage
-from sage.application.chat import SageService
+from sage.application.chat import SYSTEM_PROMPT, SageService
 from sage.config import Settings
 from sage.context.history import FullHistory
 from sage.conversations.memory import InMemoryConversationStore
@@ -41,6 +41,7 @@ def make_service(
     model: ChatModel,
     context: ContextStrategy | None = None,
     store: ConversationStore | None = None,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> SageService:
     """A `SageService` with the boring defaults filled in.
 
@@ -51,6 +52,7 @@ def make_service(
         model,
         context if context is not None else FullHistory(),
         store if store is not None else InMemoryConversationStore(TEST_TTL),
+        system_prompt=system_prompt,
     )
 
 
