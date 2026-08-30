@@ -13,8 +13,10 @@ dependencies = [
     "langchain-core>=1.5.4",
     "langchain-ollama>=1.1.0",
     "langchain-openai>=1.5.0",
+    "numpy>=2.5.2",
     "pydantic>=2.12.0",
     "pydantic-settings>=2.13.0",
+    "qdrant-client>=1.19.0",
     "redis>=5",
     "structlog>=25.6.0",
 ]
@@ -58,6 +60,8 @@ typecheck = "mypy src tests"
 test = "pytest"
 test-cov = "pytest --cov=sage --cov-report=term-missing --cov-report=html"
 logprobs = "python -m sage.logprobs"
+index = "python -m sage.indexing"
+bench = "python -m sage.bench"
 
 [tool.poe.tasks.frontend]
 help = "Frontend dev server alone, on http://localhost:5173"
@@ -125,6 +129,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # asserts are the whole point of a test
 "src/sage/logprobs.py" = ["T20"]  # a CLI, so printing is the job
+"src/sage/indexing/__main__.py" = ["T20"]  # ditto
+"src/sage/bench.py" = ["T20"]  # ditto
 # Standalone scripts, run by hand. Printing is their whole output. Every other
 # rule still applies, so unused imports and real bugs are still caught.
 "scripts/**/*.py" = ["T20"]

@@ -6,6 +6,7 @@ rather than at first use.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -65,6 +66,51 @@ class Settings(BaseSettings):
     # how long an abandoned one lingers. A day, matching the eviction policy
     # the Redis service is configured with.
     conversation_ttl_seconds: int = Field(default=86_400, gt=0)
+
+    # --- Retrieval ---------------------------------------------------------
+    # Off by default, like every other piece of infrastructure here: a fresh
+    # clone boots, answers, and passes its tests with no index on disk and no
+    # embedding provider configured. Turning it on with no index built is a
+    # startup failure, not a silent degradation — see `sage.retrieval.guard`.
+    retrieval: bool = False
+
+    corpus_path: Path = Path("data/pebble")
+
+    # The size backstop for a section that will not fit in one chunk. Roughly
+    # 450 tokens. Most sections in the corpus come in under it and stay whole.
+    chunk_max_chars: int = Field(default=1800, gt=0)
+
+    # "hashing" is to embeddings what "echo" is to chat models: offline, free,
+    # and good enough to assert against. It is a test double, not a fallback.
+    embedding_backend: Literal["hashing", "langchain"] = "hashing"
+
+    # "<provider>:<model>", same convention as `llm_model`. Reuses
+    # `llm_api_key` and `llm_base_url`, since in practice the embedding and
+    # chat providers are the same account.
+    embedding_model: str = "openai:text-embedding-3-small"
+
+    # "bruteforce" is exact and is the oracle the approximate store is measured
+    # against. "qdrant" is HNSW.
+    vector_store: Literal["bruteforce", "qdrant"] = "bruteforce"
+
+    # Where `bruteforce` keeps its index between runs. Ignored by `qdrant`,
+    # which persists itself.
+    index_path: Path = Path("data/index")
+
+    # ":memory:" or a filesystem path runs Qdrant in-process, which is how the
+    # test suite reaches it without a container. An http(s) URL is a server.
+    qdrant_url: str = ":memory:"
+    qdrant_collection: str = "pebble"
+
+    # Kilobytes of vector data below which Qdrant skips the HNSW graph and
+    # scans exhaustively — which for a collection this size is the faster and
+    # more accurate choice, and is what its 10 MB default will do here. Set to
+    # 0 to force the graph on regardless. Left at Qdrant's default unless
+    # something says otherwise, so that turning approximation on is a decision
+    # rather than an assumption. See `sage.vectorstores.qdrant`.
+    qdrant_full_scan_threshold: int | None = None
+
+    retrieval_top_k: int = Field(default=5, gt=0)
 
     @property
     def is_production(self) -> bool:

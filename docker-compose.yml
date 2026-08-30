@@ -27,6 +27,15 @@ services:
       # other by service name on the compose network.
       SAGE_REDIS_URL: redis://redis:6379/0
 
+      # Retrieval is off by default so a fresh clone boots with no index. It
+      # is on in compose because compose is where the infrastructure it needs
+      # actually exists — but the app will refuse to start until `poe index`
+      # has been run against the same settings, which is the staleness guard
+      # doing its job rather than a misconfiguration.
+      SAGE_RETRIEVAL: 'true'
+      SAGE_VECTOR_STORE: qdrant
+      SAGE_QDRANT_URL: http://qdrant:6333
+
       # Read by the ollama client directly, not by Settings — so it is inert
       # unless SAGE_LLM_MODEL names the ollama provider, and switching to
       # OpenAI or Anthropic ignores it entirely. Without it, a container
@@ -37,6 +46,11 @@ services:
       # Read-only, so --reload picks up edits without a rebuild. The venv lives
       # at /app/.venv and is not shadowed by this.
       - ./src:/app/src:ro
+
+      # The corpus and any file-backed index. Read-only: serving an index and
+      # building one are different jobs, and only the indexer below does the
+      # second.
+      - ./data:/app/data:ro
 
     # Overrides the image's CMD to add --reload. The image itself stays
     # production-shaped.
@@ -51,6 +65,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      # The index, not the database. Retrieval refuses to start without one, so
+      # the precondition worth waiting on is a finished build.
+      indexer:
+        condition: service_completed_successfully
 
     healthcheck:
       test:
@@ -64,6 +82,49 @@ services:
       timeout: 3s
       retries: 5
       start_period: 15s
+
+  # Builds the index, then exits.
+  #
+  # An index is a build artefact, so something has to build it, and the choice
+  # is between a command you remember to run on the host and a service that
+  # runs here. The host version needs two environments to agree about which
+  # store, which URL and which embedder — an agreement nothing enforces, and
+  # one the defaults do not make: on the host a file-backed index lands in
+  # ./data/index, while everything in this file reads Qdrant.
+  #
+  # Same image, same variables, same network. There is nothing left to keep in
+  # step. `poe index` on the host remains the right command for a host-side
+  # index; it is simply not what `poe up` depends on.
+  indexer:
+    build: .
+
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      SAGE_RETRIEVAL: 'true'
+      SAGE_VECTOR_STORE: qdrant
+      SAGE_QDRANT_URL: http://qdrant:6333
+      OLLAMA_HOST: http://host.docker.internal:11434
+
+    volumes:
+      - ./src:/app/src:ro
+      # Writable, unlike the API's mount: a file-backed store persists here.
+      - ./data:/app/data
+
+    command: python -m sage.indexing
+
+    # A failed build must stop the stack rather than be retried into a loop —
+    # a missing corpus or a rejected API key will fail identically every time.
+    restart: 'no'
+
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+    depends_on:
+      qdrant:
+        condition: service_healthy
 
   redis:
     image: redis:8-alpine
@@ -96,5 +157,45 @@ services:
       timeout: 3s
       retries: 5
 
+  qdrant:
+    # Pinned to the same minor as the `qdrant-client` in the lockfile. The
+    # client checks the server's version on connect and warns when they drift,
+    # and keeping the two in step means `uv add qdrant-client` and this line
+    # are a single decision rather than two that silently diverge.
+    image: qdrant/qdrant:v1.19.0
+
+    ports:
+      # 6333 is the REST API and the dashboard at /dashboard; 6334 is gRPC.
+      # Published so `poe index` and `poe bench` can reach it from the host —
+      # both run outside compose, because an index is a build artefact rather
+      # than part of the running system.
+      - '6333:6333'
+      - '6334:6334'
+
+    volumes:
+      # Named volume, as for Redis. Unlike conversations, an index has no TTL
+      # and is not meant to expire — it survives until the next `poe index`
+      # replaces it, or until `docker compose down -v` wipes it deliberately.
+      - qdrant-data:/qdrant/storage
+
+    # The indexer waits on this, so it has to be true rather than decorative.
+    #
+    # The image carries bash but no curl, wget or nc, which rules out the usual
+    # `CMD curl` probe. Bash opens a socket of its own through /dev/tcp, and one
+    # line of HTTP at Qdrant's readiness endpoint is the whole test.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bash',
+          '-c',
+          'exec 3<>/dev/tcp/127.0.0.1/6333 && printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q "200 OK" <&3',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
 volumes:
   redis-data:
+  qdrant-data:
